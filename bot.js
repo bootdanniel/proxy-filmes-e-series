@@ -15,7 +15,7 @@ async function publicarNoTextDb(url) {
     for (let t = 1; t <= 3; t++) {
         try {
             const r = await axios.get(`${TEXTDB_UPDATE}?key=${TEXTDB_KEY}&value=${url}`, { timeout: 15000 });
-            if (r.data && r.data.status === 1) { console.log(`✅ URL publicada no textdb`); return true; }
+            if (r.data && r.data.status === 1) { console.log(`✅ URL publicada no textdb: ${url}`); return true; }
         } catch (e) {}
         if (t < 3) await sleep(2000);
     }
@@ -112,12 +112,21 @@ deployment:
     const validBids = bids.map(it => {
         const b = it.bid || it;
         return { provider: b.id?.provider || b.provider, price: b.price };
-    }).filter(b => b.provider && b.price?.amount);
-    validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
+    }).filter(b => b.provider && b.price?.amount && !b.provider.includes('digitalfrontier')); // BLOQUEIA O PROVEDOR BUGADO
     
+    if (validBids.length === 0) { 
+        console.log('❌ Nenhum provedor válido deu lance (todos bloqueados ou ruins).');
+        process.exit(0);
+    }
+    
+    validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
+    const chosenBid = validBids[0];
+    
+    console.log(`🤝 Provedor escolhido: ${chosenBid.provider.substring(0, 15)}...`);
+
     try {
-        await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: validBids[0].provider }] }, { headers });
-        console.log(`✅ Lease criado no provedor ${validBids[0].provider.substring(0, 10)}...`);
+        await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: chosenBid.provider }] }, { headers });
+        console.log(`✅ Lease criado!`);
     } catch (e) {
         console.log('❌ Falha ao criar lease.');
         process.exit(0);
@@ -158,7 +167,6 @@ deployment:
 
     console.log(`✅ Container rodando! URI do Ingress: ${providerUri}`);
     
-    // VOLTAMOS A LÓGICA DO TÚNEL AQUI
     let urlTunel = null;
     for (let i = 0; i < 60 && !urlTunel; i++) {
         try {
@@ -166,7 +174,7 @@ deployment:
             if (resp.data?.url) { urlTunel = resp.data.url; break; }
         } catch (e) {}
         
-        if (i % 12 === 0 && i > 0) console.log(`[${i*5}s] Aguardando Ingress propagar para pegar o Tunel...`);
+        if (i % 12 === 0 && i > 0) console.log(`[${i*5}s] Aguardando o Túnel subir...`);
         await sleep(5000);
     }
 
@@ -176,7 +184,7 @@ deployment:
         console.log(`\n✅ Bot concluido com sucesso.`);
         process.exit(0);
     } else {
-        console.log(`⚠️ Ingress respondeu, mas o túnel não. O container continuará rodando.`);
+        console.log(`⚠️ Ingress respondeu, mas o túnel não.`);
         process.exit(0); 
     }
 }
