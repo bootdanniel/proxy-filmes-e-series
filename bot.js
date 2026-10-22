@@ -23,7 +23,7 @@ async function publicarNoTextDb(url) {
 }
 
 async function runBot() {
-    console.log('🤖 Iniciando Bot Akash...');
+    console.log('🤖 Iniciando Bot Akash (Modo Ingress Direto)...');
     for (const key of API_KEYS) {
         try {
             const h = { 'x-api-key': key };
@@ -36,15 +36,14 @@ async function runBot() {
             }
         } catch (e) {}
     }
-    await sleep(10000);
+    await sleep(8000);
 
-    // SDL MAIS LEVE E BARATO
     const sdl = `
 ---
 version: "2.0"
 services:
   proxy:
-    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v3
+    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v4
     expose:
       - port: 3000
         as: 80
@@ -66,136 +65,108 @@ deployment:
     akash: { profile: proxy, count: 1 }
 `;
 
-    let sucesso = false;
-
-    for (let tentativa = 1; tentativa <= 3 && !sucesso; tentativa++) {
-        console.log(`\n=== TENTATIVA ${tentativa} DE 3 ===`);
-
-        let chosenKey = null, maxBalance = 0;
-        for (const key of API_KEYS) {
-            try {
-                const res = await axios.get(`${API_BASE}/balances`, { headers: { 'x-api-key': key } });
-                const b = Number(res.data?.data?.balance || 0) / 1000000;
-                if (b > maxBalance) { maxBalance = b; chosenKey = key; }
-            } catch (e) {}
-        }
-        
-        // Baixamos o mínimo para 0.15 AKT
-        if (!chosenKey || maxBalance < 0.15) { 
-            console.log('❌ Sem saldo líquido. Aguardando escrow de 90s...'); 
-            await sleep(90000); 
-            continue; 
-        }
-        
-        console.log(`💰 Usando conta com ${maxBalance.toFixed(3)} AKT`);
-        const headers = { 'x-api-key': chosenKey, 'Content-Type': 'application/json' };
-
-        let createRes;
+    let chosenKey = null, maxBalance = 0;
+    for (const key of API_KEYS) {
         try {
-            createRes = await axios.post(`${API_BASE}/deployments`, { data: { sdl } }, { headers });
-        } catch (e) {
-            console.log('❌ Erro ao criar deploy:', e.response?.data?.message || e.message);
-            await sleep(90000); 
-            continue;
-        }
-        
-        const dseq = createRes.data?.data?.dseq;
-        const manifest = createRes.data?.data?.manifest;
-        console.log(`✅ Deploy criado! DSEQ: ${dseq}`);
-        if (!dseq || !manifest) { continue; }
+            const res = await axios.get(`${API_BASE}/balances`, { headers: { 'x-api-key': key } });
+            const b = Number(res.data?.data?.balance || 0) / 1000000;
+            if (b > maxBalance) { maxBalance = b; chosenKey = key; }
+        } catch (e) {}
+    }
+    
+    if (!chosenKey || maxBalance < 0.15) { 
+        console.log('❌ Sem saldo líquido. Aguardando escrow...'); 
+        process.exit(0); 
+    }
+    
+    console.log(`💰 Usando conta com ${maxBalance.toFixed(3)} AKT`);
+    const headers = { 'x-api-key': chosenKey, 'Content-Type': 'application/json' };
 
-        let bids = [];
-        for (let i = 0; i < 20; i++) {
-            await sleep(3000);
-            try {
-                const r = await axios.get(`${API_BASE}/bids?dseq=${dseq}`, { headers });
-                bids = r.data?.data || [];
-                if (bids.length) { console.log(`✅ ${bids.length} bid(s)`); break; }
-            } catch (e) {}
-        }
-        
-        if (!bids.length) { 
-            await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {}); 
-            await sleep(10000);
-            continue; 
-        }
+    let createRes;
+    try {
+        createRes = await axios.post(`${API_BASE}/deployments`, { data: { sdl } }, { headers });
+    } catch (e) {
+        console.log('❌ Erro ao criar deploy:', e.response?.data?.message || e.message);
+        process.exit(0); 
+    }
+    
+    const dseq = createRes.data?.data?.dseq;
+    const manifest = createRes.data?.data?.manifest;
+    console.log(`✅ Deploy criado! DSEQ: ${dseq}`);
+    if (!dseq || !manifest) { process.exit(1); }
 
-        const validBids = bids.map(it => {
-            const b = it.bid || it;
-            return { provider: b.id?.provider || b.provider, price: b.price };
-        }).filter(b => b.provider && b.price?.amount);
-        validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
-        const chosenBid = validBids[0]; 
-        
+    let bids = [];
+    for (let i = 0; i < 20; i++) {
+        await sleep(3000);
         try {
-            await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: chosenBid.provider }] }, { headers });
-            console.log(`✅ Lease criado no provedor ${chosenBid.provider.substring(0, 10)}...`);
-        } catch (e) {
-            console.log('❌ Falha ao criar lease');
-            await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {});
-            await sleep(10000);
-            continue;
-        }
+            const r = await axios.get(`${API_BASE}/bids?dseq=${dseq}`, { headers });
+            bids = r.data?.data || [];
+            if (bids.length) { console.log(`✅ ${bids.length} bid(s)`); break; }
+        } catch (e) {}
+    }
+    
+    if (!bids.length) { process.exit(0); }
 
-        let isReady = false, providerUri = null;
-        for (let i = 0; i < 36; i++) {
-            await sleep(5000);
-            try {
-                const r = await axios.get(`${API_BASE}/deployments/${dseq}`, { headers });
-                const lease = (r.data?.data?.leases || [])[0];
-                const raw = JSON.stringify(lease?.status || {});
-                if (FAIL_RE.test(raw)) { break; }
-                const svcs = lease?.status?.services || {};
-                for (const svc of (Array.isArray(svcs) ? svcs : Object.values(svcs))) {
-                    const ready = (Number(svc.ready_replicas) || Number(svc.available) || 0) >= 1;
-                    const uris = svc.uris || svc.uri || [];
-                    if (ready && uris.length) { isReady = true; providerUri = uris[0]; break; }
-                }
-                if (isReady) break;
-            } catch (e) {}
-        }
-
-        if (!isReady) {
-            console.log(`❌ Container nao subiu a tempo.`);
-            await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {});
-            await sleep(10000);
-            continue;
-        }
-
-        console.log(`✅ Container rodando! URI: ${providerUri}`);
-        const baseUrl = providerUri.startsWith('http') ? providerUri : `https://${providerUri}`;
-        
-        let urlTunel = null;
-        for (let i = 0; i < 60 && !urlTunel; i++) {
-            try {
-                const resp = await axios.get(`${baseUrl}/tunnel-url`, { timeout: 10000, httpsAgent });
-                if (resp.data?.url) { urlTunel = resp.data.url; break; }
-            } catch (e) {}
-            
-            if (i % 12 === 0 && i > 0) console.log(`[${i*5}s] Aguardando Ingress da Akash propagar...`);
-            
-            if (i === 55) {
-                try {
-                    const dbg = await axios.get(`${baseUrl}/debug-tunnel`, { timeout: 10000, httpsAgent });
-                    console.log('🔍 DEBUG TUNEL:', JSON.stringify(dbg.data.ultimasLinhas).slice(0, 1000));
-                } catch (e2) { console.log('🔍 /debug-tunnel também falhou (Ingress 502)'); }
-            }
-            await sleep(5000);
-        }
-
-        if (urlTunel) {
-            console.log(`🎉 TUNEL: ${urlTunel}`);
-            await publicarNoTextDb(urlTunel);
-            sucesso = true;
-            break;
-        } else {
-            console.log(`⚠️ Container rodando, mas o Ingress não respondeu. NÃO VAMOS DELETAR. Tente de novo em 5 min.`);
-            break; 
-        }
+    const validBids = bids.map(it => {
+        const b = it.bid || it;
+        return { provider: b.id?.provider || b.provider, price: b.price };
+    }).filter(b => b.provider && b.price?.amount);
+    validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
+    
+    try {
+        await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: validBids[0].provider }] }, { headers });
+        console.log(`✅ Lease criado no provedor ${validBids[0].provider.substring(0, 10)}...`);
+    } catch (e) {
+        console.log('❌ Falha ao criar lease.');
+        process.exit(0);
     }
 
-    if (!sucesso) { console.error('\n❌ O bot encerrou com avisos.'); process.exit(1); }
-    console.log('\n✅ Bot concluido com sucesso.');
-    process.exit(0);
+    let isReady = false, providerUri = null;
+    for (let i = 0; i < 36; i++) {
+        await sleep(5000);
+        try {
+            const r = await axios.get(`${API_BASE}/deployments/${dseq}`, { headers });
+            const lease = (r.data?.data?.leases || [])[0];
+            const raw = JSON.stringify(lease?.status || {});
+            if (FAIL_RE.test(raw)) { break; }
+            const svcs = lease?.status?.services || {};
+            for (const svc of (Array.isArray(svcs) ? svcs : Object.values(svcs))) {
+                const ready = (Number(svc.ready_replicas) || Number(svc.available) || 0) >= 1;
+                const uris = svc.uris || svc.uri || [];
+                if (ready && uris.length) { isReady = true; providerUri = uris[0]; break; }
+            }
+            if (isReady) break;
+        } catch (e) {}
+    }
+
+    if (!isReady) {
+        console.log(`❌ Container nao subiu. Abortando.`);
+        process.exit(1);
+    }
+
+    // AQUI ESTÁ A MÁGICA: Pegamos a URL ingress da Akash e testamos ela
+    const baseUrl = providerUri.startsWith('http') ? providerUri : `https://${providerUri}`;
+    console.log(`✅ Container rodando! Testando Ingress: ${baseUrl}`);
+    
+    let urlFinal = null;
+    for (let i = 0; i < 20 && !urlFinal; i++) {
+        try {
+            // Faz um GET na raiz do nosso proxy pra ver se ele responde
+            const resp = await axios.get(`${baseUrl}/debug-tunnel`, { timeout: 10000, httpsAgent });
+            if (resp.status === 200) { urlFinal = baseUrl; break; }
+        } catch (e) {}
+        if (i % 4 === 0) console.log(`[${i*5}s] Aguardando Ingress da Akash propagar...`);
+        await sleep(5000);
+    }
+
+    if (urlFinal) {
+        console.log(`🎉 PROXY ONLINE E ESTÁVEL: ${urlFinal}`);
+        await publicarNoTextDb(urlFinal);
+        console.log(`\n✅ Bot concluido com sucesso.`);
+        process.exit(0);
+    } else {
+        console.log(`⚠️ Ingress não respondeu a tempo. O container continuará rodando. Tente rodar o bot de novo em 5 minutos.`);
+        process.exit(0); 
+    }
 }
 runBot();
