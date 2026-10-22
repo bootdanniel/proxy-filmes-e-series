@@ -38,6 +38,7 @@ async function runBot() {
     }
     await sleep(10000);
 
+    // SDL MAIS LEVE E BARATO
     const sdl = `
 ---
 version: "2.0"
@@ -53,13 +54,13 @@ profiles:
   compute:
     proxy:
       resources:
-        cpu: { units: 2.0 }
-        memory: { size: 4Gi }
-        storage: { size: 4Gi }
+        cpu: { units: 0.5 }
+        memory: { size: 1Gi }
+        storage: { size: 1Gi }
   placement:
     akash:
       pricing:
-        proxy: { denom: uakt, amount: 80000 }
+        proxy: { denom: uakt, amount: 15000 }
 deployment:
   proxy:
     akash: { profile: proxy, count: 1 }
@@ -79,7 +80,8 @@ deployment:
             } catch (e) {}
         }
         
-        if (!chosenKey || maxBalance < 0.40) { 
+        // Baixamos o mínimo para 0.15 AKT
+        if (!chosenKey || maxBalance < 0.15) { 
             console.log('❌ Sem saldo líquido. Aguardando escrow de 90s...'); 
             await sleep(90000); 
             continue; 
@@ -187,7 +189,7 @@ deployment:
             sucesso = true;
             break;
         } else {
-            console.log(`⚠️ Container rodando, mas o Ingress não respondeu. NÃO VAMOS DELETAR para não perder o saldo. Tente rodar o bot novamente em 5 minutos.`);
+            console.log(`⚠️ Container rodando, mas o Ingress não respondeu. NÃO VAMOS DELETAR. Tente de novo em 5 min.`);
             break; 
         }
     }
