@@ -5,7 +5,8 @@ import { spawn } from 'child_process';
 console.log("Iniciando Cloudflare Tunnel...");
 const tunnel = spawn('cloudflared', [
     'tunnel', '--no-autoupdate', '--protocol', 'http2',
-    '--edge-ip-version', '4',   // TESTE 1: Força IPv4 para evitar quebra no overlay da Akash
+    '--edge-ip-version', '4',
+    '--ha-connections', '3',   // TESTE 3: Múltiplas conexões para evitar queda por flap
     '--url', 'http://localhost:3000', '--metrics', '127.0.0.1:20241'
 ]);
 
