@@ -4,27 +4,37 @@ import { Readable } from 'node:stream';
 const app = express();
 const PORT = 3000;
 let tunnelUrl = null;
+const tunnelLog = []; // Buffer de logs
 
 export function setTunnelUrl(url) {
     tunnelUrl = url;
     console.log(`[server] URL do tunel salva: ${url}`);
 }
 
-// O BOT vai ler esta URL
+export function logTunnel(linha) {
+    tunnelLog.push(linha);
+    if (tunnelLog.length > 200) tunnelLog.shift();
+}
+
 app.get('/tunnel-url', (req, res) => {
     if (tunnelUrl) res.json({ url: tunnelUrl });
     else res.status(404).json({ error: 'URL ainda nao disponivel' });
 });
 
-// Rota que o seu Site 2 vai chamar: /stream/movie/45904 ou /stream/series/4164?season=1&episode=1
+app.get('/debug-tunnel', (req, res) => {
+    res.json({
+        temUrl: !!tunnelUrl,
+        url: tunnelUrl,
+        ultimasLinhas: tunnelLog.slice(-40)
+    });
+});
+
 app.get('/stream/:type/:id', async (req, res) => {
     const { type, id } = req.params;
     const { season = '1', episode = '1' } = req.query;
-
     if (!['movie', 'series'].includes(type)) return res.status(400).send('Tipo invalido');
 
     try {
-        // 1. Pega o HTML do iframe original (onde fica o token)
         const iframeUrl = `https://bionicserver.cu.ma/wumv/w/${type}/${id}?season=${season}&episode=${episode}`;
         const htmlRes = await fetch(iframeUrl, {
             headers: { 
@@ -33,16 +43,11 @@ app.get('/stream/:type/:id', async (req, res) => {
             }
         });
         const html = await htmlRes.text();
-        
-        // 2. Extrai o Token do JSON escondido
         const match = html.match(/"t"\s*:\s*"([^"]+)"/);
-        if (!match) return res.status(500).send('Token nao encontrado no HTML');
+        if (!match) return res.status(500).send('Token nao encontrado');
         const token = match[1];
-
-        // 3. Monta a URL REAL do MP4
         const mp4Url = `https://bionicserver.cu.ma/stream?s=${token}`;
 
-        // 4. Faz o proxy do MP4 para o site 2 (Suporta Range/Seek para o video rodar liso)
         const range = req.headers.range;
         const headers = {
             'Referer': 'https://wuembed.dpdns.org/',
@@ -51,7 +56,6 @@ app.get('/stream/:type/:id', async (req, res) => {
         if (range) headers['Range'] = range;
 
         const videoRes = await fetch(mp4Url, { headers });
-
         res.status(videoRes.status);
         videoRes.headers.forEach((value, key) => {
             if (['content-type', 'content-length', 'content-range', 'accept-ranges'].includes(key.toLowerCase())) {
@@ -59,18 +63,13 @@ app.get('/stream/:type/:id', async (req, res) => {
             }
         });
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Headers', '*');
         
-        if (videoRes.body) {
-            Readable.fromWeb(videoRes.body).pipe(res);
-        } else {
-            res.end();
-        }
-
+        if (videoRes.body) Readable.fromWeb(videoRes.body).pipe(res);
+        else res.end();
     } catch (e) {
         console.error(e);
         res.status(500).send('Erro no Proxy: ' + e.message);
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Proxy de Filmes rodando na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Proxy rodando na porta ${PORT}`));
