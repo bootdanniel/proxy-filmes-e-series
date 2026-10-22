@@ -15,10 +15,7 @@ async function publicarNoTextDb(url) {
     for (let t = 1; t <= 3; t++) {
         try {
             const r = await axios.get(`${TEXTDB_UPDATE}?key=${TEXTDB_KEY}&value=${url}`, { timeout: 15000 });
-            if (r.data && r.data.status === 1) {
-                console.log(`✅ URL publicada no textdb`);
-                return true;
-            }
+            if (r.data && r.data.status === 1) { console.log(`✅ URL publicada no textdb`); return true; }
         } catch (e) {}
         if (t < 3) await sleep(2000);
     }
@@ -39,7 +36,7 @@ async function runBot() {
             }
         } catch (e) {}
     }
-    await sleep(8000);
+    await sleep(10000);
 
     const sdl = `
 ---
@@ -68,13 +65,11 @@ deployment:
     akash: { profile: proxy, count: 1 }
 `;
 
-    const provedoresFalhos = new Set();
     let sucesso = false;
 
     for (let tentativa = 1; tentativa <= 3 && !sucesso; tentativa++) {
         console.log(`\n=== TENTATIVA ${tentativa} DE 3 ===`);
 
-        // AQUI ESTÁ A CORREÇÃO DO SALDO: Escolhe a conta NOVAMENTE a cada tentativa
         let chosenKey = null, maxBalance = 0;
         for (const key of API_KEYS) {
             try {
@@ -85,8 +80,8 @@ deployment:
         }
         
         if (!chosenKey || maxBalance < 0.40) { 
-            console.log('❌ Sem saldo líquido. Aguardando escrow...'); 
-            await sleep(45000); 
+            console.log('❌ Sem saldo líquido. Aguardando escrow de 90s...'); 
+            await sleep(90000); 
             continue; 
         }
         
@@ -98,7 +93,7 @@ deployment:
             createRes = await axios.post(`${API_BASE}/deployments`, { data: { sdl } }, { headers });
         } catch (e) {
             console.log('❌ Erro ao criar deploy:', e.response?.data?.message || e.message);
-            await sleep(45000); // Espera se for erro de saldo
+            await sleep(90000); 
             continue;
         }
         
@@ -119,7 +114,7 @@ deployment:
         
         if (!bids.length) { 
             await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {}); 
-            await sleep(5000);
+            await sleep(10000);
             continue; 
         }
 
@@ -128,27 +123,26 @@ deployment:
             return { provider: b.id?.provider || b.provider, price: b.price };
         }).filter(b => b.provider && b.price?.amount);
         validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
-        const chosenBid = validBids.filter(b => !provedoresFalhos.has(b.provider))[0] || validBids[0];
+        const chosenBid = validBids[0]; 
         
         try {
             await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: chosenBid.provider }] }, { headers });
             console.log(`✅ Lease criado no provedor ${chosenBid.provider.substring(0, 10)}...`);
         } catch (e) {
             console.log('❌ Falha ao criar lease');
-            provedoresFalhos.add(chosenBid.provider);
             await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {});
-            await sleep(5000);
+            await sleep(10000);
             continue;
         }
 
-        let isReady = false, providerUri = null, falha = null;
+        let isReady = false, providerUri = null;
         for (let i = 0; i < 36; i++) {
             await sleep(5000);
             try {
                 const r = await axios.get(`${API_BASE}/deployments/${dseq}`, { headers });
                 const lease = (r.data?.data?.leases || [])[0];
                 const raw = JSON.stringify(lease?.status || {});
-                if (FAIL_RE.test(raw)) { falha = raw.slice(0, 200); break; }
+                if (FAIL_RE.test(raw)) { break; }
                 const svcs = lease?.status?.services || {};
                 for (const svc of (Array.isArray(svcs) ? svcs : Object.values(svcs))) {
                     const ready = (Number(svc.ready_replicas) || Number(svc.available) || 0) >= 1;
@@ -159,11 +153,10 @@ deployment:
             } catch (e) {}
         }
 
-        if (falha || !isReady) {
-            console.log(`❌ Container nao subiu neste provedor.`);
-            provedoresFalhos.add(chosenBid.provider);
+        if (!isReady) {
+            console.log(`❌ Container nao subiu a tempo.`);
             await axios.delete(`${API_BASE}/deployments/${dseq}`, { headers }).catch(() => {});
-            await sleep(5000);
+            await sleep(10000);
             continue;
         }
 
@@ -171,20 +164,19 @@ deployment:
         const baseUrl = providerUri.startsWith('http') ? providerUri : `https://${providerUri}`;
         
         let urlTunel = null;
-        for (let i = 0; i < 20 && !urlTunel; i++) {
+        for (let i = 0; i < 60 && !urlTunel; i++) {
             try {
                 const resp = await axios.get(`${baseUrl}/tunnel-url`, { timeout: 10000, httpsAgent });
                 if (resp.data?.url) { urlTunel = resp.data.url; break; }
-            } catch (e) {
-                // Ingress ainda propagando
-            }
+            } catch (e) {}
             
-            // Se estourou as tentativas, puxa o debug
-            if (i === 19) {
+            if (i % 12 === 0 && i > 0) console.log(`[${i*5}s] Aguardando Ingress da Akash propagar...`);
+            
+            if (i === 55) {
                 try {
                     const dbg = await axios.get(`${baseUrl}/debug-tunnel`, { timeout: 10000, httpsAgent });
                     console.log('🔍 DEBUG TUNEL:', JSON.stringify(dbg.data.ultimasLinhas).slice(0, 1000));
-                } catch (e2) { console.log('🔍 /debug-tunnel falhou'); }
+                } catch (e2) { console.log('🔍 /debug-tunnel também falhou (Ingress 502)'); }
             }
             await sleep(5000);
         }
@@ -194,10 +186,13 @@ deployment:
             await publicarNoTextDb(urlTunel);
             sucesso = true;
             break;
+        } else {
+            console.log(`⚠️ Container rodando, mas o Ingress não respondeu. NÃO VAMOS DELETAR para não perder o saldo. Tente rodar o bot novamente em 5 minutos.`);
+            break; 
         }
     }
 
-    if (!sucesso) { console.error('\n❌ Todas as tentativas falharam.'); process.exit(1); }
+    if (!sucesso) { console.error('\n❌ O bot encerrou com avisos.'); process.exit(1); }
     console.log('\n✅ Bot concluido com sucesso.');
     process.exit(0);
 }
