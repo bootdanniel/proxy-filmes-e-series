@@ -23,7 +23,10 @@ async function publicarNoTextDb(url) {
 }
 
 async function runBot() {
-    console.log('🤖 Iniciando Bot Akash...');
+    console.log('🤖 Iniciando Bot Akash (Modo Paciente)...');
+    
+    // 1. FECHAR DEPLOYS ANTIGOS
+    console.log('🧹 Limpando deploys antigos nas chaves de API...');
     for (const key of API_KEYS) {
         try {
             const h = { 'x-api-key': key };
@@ -33,12 +36,42 @@ async function runBot() {
             for (const d of list) {
                 if (d.state !== 'closed') {
                     await axios.delete(`${API_BASE}/deployments/${d.dseq}`, { headers: h });
-                    console.log(`🧹 Deploy ${d.dseq} removido`);
+                    console.log(`  Deploy ${d.dseq} fechado.`);
                 }
             }
         } catch (e) {}
     }
-    await sleep(8000);
+
+    // 2. ESPERAR O SALDO (A NOVA INTELIGÊNCIA)
+    let chosenKey = null, maxBalance = 0;
+    let tentativasSaldo = 0;
+    
+    while (tentativasSaldo < 15) { // Tenta por até 15 minutos
+        maxBalance = 0; chosenKey = null;
+        for (const key of API_KEYS) {
+            try {
+                const res = await axios.get(`${API_BASE}/balances`, { headers: { 'x-api-key': key } });
+                const b = Number(res.data?.data?.balance || 0) / 1000000;
+                if (b > maxBalance) { maxBalance = b; chosenKey = key; }
+            } catch (e) {}
+        }
+        
+        if (maxBalance >= 0.15) {
+            console.log(`💰 Saldo liberado! Usando conta com ${maxBalance.toFixed(3)} AKT.`);
+            break;
+        }
+        
+        console.log(`⏳ Saldo preso no escrow (${maxBalance.toFixed(3)} AKT). Aguardando 1 minuto... (${tentativasSaldo+1}/15)`);
+        await sleep(60000); // Espera 1 minuto
+        tentativasSaldo++;
+    }
+
+    if (!chosenKey || maxBalance < 0.15) { 
+        console.log('❌ Desisti. O saldo não voltou a tempo. Rode o bot de novo mais tarde.'); 
+        process.exit(0); 
+    }
+    
+    const headers = { 'x-api-key': chosenKey, 'Content-Type': 'application/json' };
 
     const sdl = `
 ---
@@ -67,23 +100,6 @@ deployment:
     akash: { profile: proxy, count: 1 }
 `;
 
-    let chosenKey = null, maxBalance = 0;
-    for (const key of API_KEYS) {
-        try {
-            const res = await axios.get(`${API_BASE}/balances`, { headers: { 'x-api-key': key } });
-            const b = Number(res.data?.data?.balance || 0) / 1000000;
-            if (b > maxBalance) { maxBalance = b; chosenKey = key; }
-        } catch (e) {}
-    }
-    
-    if (!chosenKey || maxBalance < 0.15) { 
-        console.log('❌ Sem saldo líquido. Aguardando escrow...'); 
-        process.exit(0); 
-    }
-    
-    console.log(`💰 Usando conta com ${maxBalance.toFixed(3)} AKT`);
-    const headers = { 'x-api-key': chosenKey, 'Content-Type': 'application/json' };
-
     let createRes;
     try {
         createRes = await axios.post(`${API_BASE}/deployments`, { data: { sdl } }, { headers });
@@ -95,8 +111,7 @@ deployment:
     const dseq = createRes.data?.data?.dseq;
     const manifest = createRes.data?.data?.manifest;
     console.log(`✅ Deploy criado! DSEQ: ${dseq}`);
-    if (!dseq || !manifest) { process.exit(1); }
-
+    
     let bids = [];
     for (let i = 0; i < 20; i++) {
         await sleep(3000);
@@ -112,21 +127,19 @@ deployment:
     const validBids = bids.map(it => {
         const b = it.bid || it;
         return { provider: b.id?.provider || b.provider, price: b.price };
-    }).filter(b => b.provider && b.price?.amount && !b.provider.includes('digitalfrontier')); // BLOQUEIA O PROVEDOR BUGADO
+    }).filter(b => b.provider && b.price?.amount && !b.provider.includes('digitalfrontier')); 
     
     if (validBids.length === 0) { 
-        console.log('❌ Nenhum provedor válido deu lance (todos bloqueados ou ruins).');
+        console.log('❌ Nenhum provedor válido.');
         process.exit(0);
     }
     
     validBids.sort((a, b) => parseInt(a.price.amount) - parseInt(b.price.amount));
     const chosenBid = validBids[0];
-    
-    console.log(`🤝 Provedor escolhido: ${chosenBid.provider.substring(0, 15)}...`);
+    console.log(`🤝 Provedor: ${chosenBid.provider.substring(0, 15)}...`);
 
     try {
         await axios.post(`${API_BASE}/leases`, { manifest, leases: [{ dseq, gseq: 1, oseq: 1, provider: chosenBid.provider }] }, { headers });
-        console.log(`✅ Lease criado!`);
     } catch (e) {
         console.log('❌ Falha ao criar lease.');
         process.exit(0);
@@ -143,13 +156,11 @@ deployment:
             if (leases.length > 0) {
                 const raw = JSON.stringify(leases[0].status || {});
                 if (FAIL_RE.test(raw)) { break; }
-                
                 const svcs = leases[0].status?.services || {};
                 const list = Array.isArray(svcs) ? svcs : Object.values(svcs);
                 if (list.length > 0) {
                     const ready = (Number(list[0].ready_replicas) || Number(list[0].available) || 0) >= 1;
                     const uri = (list[0].uris || list[0].uri || [])[0];
-                    
                     if (ready && uri) { 
                         isReady = true; 
                         providerUri = uri.startsWith('http') ? uri : `https://${uri}`; 
@@ -161,11 +172,11 @@ deployment:
     }
 
     if (!isReady) {
-        console.log(`❌ Container nao subiu. Abortando.`);
+        console.log(`❌ Container nao subiu.`);
         process.exit(1);
     }
 
-    console.log(`✅ Container rodando! URI do Ingress: ${providerUri}`);
+    console.log(`✅ Container rodando! URI: ${providerUri}`);
     
     let urlTunel = null;
     for (let i = 0; i < 60 && !urlTunel; i++) {
