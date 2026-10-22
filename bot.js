@@ -23,12 +23,14 @@ async function publicarNoTextDb(url) {
 }
 
 async function runBot() {
-    console.log('🤖 Iniciando Bot Akash (Modo Ingress Direto)...');
+    console.log('🤖 Iniciando Bot Akash...');
     for (const key of API_KEYS) {
         try {
             const h = { 'x-api-key': key };
             const deps = await axios.get(`${API_BASE}/deployments`, { headers: h });
-            for (const d of (Array.isArray(deps.data?.data) ? deps.data.data : [])) {
+            const raw = deps.data?.data ?? deps.data;
+            const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
+            for (const d of list) {
                 if (d.state !== 'closed') {
                     await axios.delete(`${API_BASE}/deployments/${d.dseq}`, { headers: h });
                     console.log(`🧹 Deploy ${d.dseq} removido`);
@@ -43,7 +45,7 @@ async function runBot() {
 version: "2.0"
 services:
   proxy:
-    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v5
+    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v6
     expose:
       - port: 3000
         as: 80
@@ -126,16 +128,26 @@ deployment:
         await sleep(5000);
         try {
             const r = await axios.get(`${API_BASE}/deployments/${dseq}`, { headers });
-            const lease = (r.data?.data?.leases || [])[0];
-            const raw = JSON.stringify(lease?.status || {});
-            if (FAIL_RE.test(raw)) { break; }
-            const svcs = lease?.status?.services || {};
-            for (const svc of (Array.isArray(svcs) ? svcs : Object.values(svcs))) {
-                const ready = (Number(svc.ready_replicas) || Number(svc.available) || 0) >= 1;
-                const uris = svc.uris || svc.uri || [];
-                if (ready && uris.length) { isReady = true; providerUri = uris[0]; break; }
+            const rawLeases = r.data?.data?.leases ?? r.data?.leases ?? [];
+            const leases = Array.isArray(rawLeases) ? rawLeases : [];
+            
+            if (leases.length > 0) {
+                const raw = JSON.stringify(leases[0].status || {});
+                if (FAIL_RE.test(raw)) { break; }
+                
+                const svcs = leases[0].status?.services || {};
+                const list = Array.isArray(svcs) ? svcs : Object.values(svcs);
+                if (list.length > 0) {
+                    const ready = (Number(list[0].ready_replicas) || Number(list[0].available) || 0) >= 1;
+                    const uri = (list[0].uris || list[0].uri || [])[0];
+                    
+                    if (ready && uri) { 
+                        isReady = true; 
+                        providerUri = uri.startsWith('http') ? uri : `https://${uri}`; 
+                        break; 
+                    }
+                }
             }
-            if (isReady) break;
         } catch (e) {}
     }
 
@@ -144,28 +156,27 @@ deployment:
         process.exit(1);
     }
 
-    // AQUI ESTÁ A MÁGICA: Pegamos a URL ingress da Akash e testamos ela
-    const baseUrl = providerUri.startsWith('http') ? providerUri : `https://${providerUri}`;
-    console.log(`✅ Container rodando! Testando Ingress: ${baseUrl}`);
+    console.log(`✅ Container rodando! URI do Ingress: ${providerUri}`);
     
-    let urlFinal = null;
-    for (let i = 0; i < 20 && !urlFinal; i++) {
+    // VOLTAMOS A LÓGICA DO TÚNEL AQUI
+    let urlTunel = null;
+    for (let i = 0; i < 60 && !urlTunel; i++) {
         try {
-            // Faz um GET na raiz do nosso proxy pra ver se ele responde
-            const resp = await axios.get(`${baseUrl}/debug-tunnel`, { timeout: 10000, httpsAgent });
-            if (resp.status === 200) { urlFinal = baseUrl; break; }
+            const resp = await axios.get(`${providerUri}/tunnel-url`, { timeout: 10000, httpsAgent });
+            if (resp.data?.url) { urlTunel = resp.data.url; break; }
         } catch (e) {}
-        if (i % 4 === 0) console.log(`[${i*5}s] Aguardando Ingress da Akash propagar...`);
+        
+        if (i % 12 === 0 && i > 0) console.log(`[${i*5}s] Aguardando Ingress propagar para pegar o Tunel...`);
         await sleep(5000);
     }
 
-    if (urlFinal) {
-        console.log(`🎉 PROXY ONLINE E ESTÁVEL: ${urlFinal}`);
-        await publicarNoTextDb(urlFinal);
+    if (urlTunel) {
+        console.log(`🎉 TUNEL ENCONTRADO: ${urlTunel}`);
+        await publicarNoTextDb(urlTunel);
         console.log(`\n✅ Bot concluido com sucesso.`);
         process.exit(0);
     } else {
-        console.log(`⚠️ Ingress não respondeu a tempo. O container continuará rodando. Tente rodar o bot de novo em 5 minutos.`);
+        console.log(`⚠️ Ingress respondeu, mas o túnel não. O container continuará rodando.`);
         process.exit(0); 
     }
 }

@@ -51,6 +51,7 @@ app.get('/stream/:type/:id', async (req, res) => {
         const range = req.headers.range;
         const headers = {
             'Referer': 'https://wuembed.dpdns.org/',
+            'Origin': 'https://wuembed.dpdns.org', // <-- ADICIONADO AQUI
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         };
         if (range) headers['Range'] = range;
