@@ -43,7 +43,7 @@ async function runBot() {
 version: "2.0"
 services:
   proxy:
-    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v4
+    image: ghcr.io/bootdanniel/proxy-filmes-e-series:v5
     expose:
       - port: 3000
         as: 80
