@@ -2,11 +2,11 @@ import { setTunnelUrl, logTunnel } from './server.js';
 import './server.js';
 import { spawn } from 'child_process';
 
-console.log("Iniciando Cloudflare Tunnel (v5 - QUIC)...");
+console.log("Iniciando Cloudflare Tunnel (v7 - HTTP2)...");
 const tunnel = spawn('cloudflared', [
     'tunnel', '--no-autoupdate',
-    '--protocol', 'quic',        // <-- Voltando para QUIC (UDP), que passou no teste
-    '--edge-ip-version', '4',    // <-- Forçando IPv4 (evita o bug do overlay)
+    '--protocol', 'http2',        // TCP é mais estável que QUIC no overlay
+    '--edge-ip-version', '4',     // Força IPv4
     '--url', 'http://localhost:3000', '--metrics', '127.0.0.1:20241'
 ]);
 

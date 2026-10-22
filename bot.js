@@ -23,10 +23,8 @@ async function publicarNoTextDb(url) {
 }
 
 async function runBot() {
-    console.log('🤖 Iniciando Bot Akash (Modo Paciente)...');
+    console.log('🤖 Iniciando Bot Akash (Modo Paciente v7)...');
     
-    // 1. FECHAR DEPLOYS ANTIGOS
-    console.log('🧹 Limpando deploys antigos nas chaves de API...');
     for (const key of API_KEYS) {
         try {
             const h = { 'x-api-key': key };
@@ -36,17 +34,16 @@ async function runBot() {
             for (const d of list) {
                 if (d.state !== 'closed') {
                     await axios.delete(`${API_BASE}/deployments/${d.dseq}`, { headers: h });
-                    console.log(`  Deploy ${d.dseq} fechado.`);
+                    console.log(`🧹 Deploy ${d.dseq} removido`);
                 }
             }
         } catch (e) {}
     }
 
-    // 2. ESPERAR O SALDO (A NOVA INTELIGÊNCIA)
     let chosenKey = null, maxBalance = 0;
     let tentativasSaldo = 0;
     
-    while (tentativasSaldo < 15) { // Tenta por até 15 minutos
+    while (tentativasSaldo < 15) {
         maxBalance = 0; chosenKey = null;
         for (const key of API_KEYS) {
             try {
@@ -62,12 +59,12 @@ async function runBot() {
         }
         
         console.log(`⏳ Saldo preso no escrow (${maxBalance.toFixed(3)} AKT). Aguardando 1 minuto... (${tentativasSaldo+1}/15)`);
-        await sleep(60000); // Espera 1 minuto
+        await sleep(60000);
         tentativasSaldo++;
     }
 
     if (!chosenKey || maxBalance < 0.15) { 
-        console.log('❌ Desisti. O saldo não voltou a tempo. Rode o bot de novo mais tarde.'); 
+        console.log('❌ Desisti. O saldo não voltou a tempo.'); 
         process.exit(0); 
     }
     
@@ -110,7 +107,7 @@ deployment:
     
     const dseq = createRes.data?.data?.dseq;
     const manifest = createRes.data?.data?.manifest;
-    console.log(`✅ Deploy criado! DSEQ: ${dseq}`);
+    console.log(`✅ Deploy v7 criado! DSEQ: ${dseq}`);
     
     let bids = [];
     for (let i = 0; i < 20; i++) {
@@ -127,7 +124,7 @@ deployment:
     const validBids = bids.map(it => {
         const b = it.bid || it;
         return { provider: b.id?.provider || b.provider, price: b.price };
-    }).filter(b => b.provider && b.price?.amount && !b.provider.includes('digitalfrontier')); 
+    }).filter(b => b.provider && b.price?.amount);
     
     if (validBids.length === 0) { 
         console.log('❌ Nenhum provedor válido.');
@@ -176,7 +173,7 @@ deployment:
         process.exit(1);
     }
 
-    console.log(`✅ Container rodando! URI: ${providerUri}`);
+    console.log(`✅ Container v7 rodando! URI: ${providerUri}`);
     
     let urlTunel = null;
     for (let i = 0; i < 60 && !urlTunel; i++) {
