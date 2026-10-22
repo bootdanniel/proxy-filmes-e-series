@@ -2,11 +2,12 @@ import { setTunnelUrl, logTunnel } from './server.js';
 import './server.js';
 import { spawn } from 'child_process';
 
-console.log("Iniciando Cloudflare Tunnel (v7 - HTTP2)...");
+console.log("Iniciando Cloudflare Tunnel (v7 - Modo Tanque)...");
 const tunnel = spawn('cloudflared', [
     'tunnel', '--no-autoupdate',
-    '--protocol', 'http2',        // TCP é mais estável que QUIC no overlay
-    '--edge-ip-version', '4',     // Força IPv4
+    '--protocol', 'http2',        
+    '--edge-ip-version', '4',     
+    '--ha-connections', '3',      // <-- A FLAG MÁGICA CONTRA QUEDA
     '--url', 'http://localhost:3000', '--metrics', '127.0.0.1:20241'
 ]);
 
