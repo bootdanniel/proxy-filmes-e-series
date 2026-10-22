@@ -1,0 +1,9 @@
+{
+  "name": "proxy-filmes-e-series",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.6.8"
+  }
+}
